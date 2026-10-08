@@ -1,95 +1,103 @@
+# Elan 04f3:0c6e Fingerprint Reader Fix for Linux
 
+This repository provides a working `libfprint` driver (`elanpress`) for the **Elan 04f3:0c6e** fingerprint sensor, commonly found in various ASUS laptops (such as the Zenbook 14, ROG Flow X13, and others).
 
-<div align="center">
+---
 
-# LibFPrint
+## The Problem
 
-*LibFPrint is part of the **[FPrint][Website]** project.*
+Upstream `libfprint` misclassifies the `04f3:0c6e` sensor under the standard `elan` swipe driver:
 
-<br/>
+1. **Swipe vs. Touch Misclassification**: The sensor is physically a touch/press pad, but upstream hardcodes the driver class to `FP_SCAN_TYPE_SWIPE`. As a result, the desktop environment and `fprintd` expect continuous swiping gestures, leading to `"swipe too short"` errors.
+2. **Hardware Wedging / Protocol Error**: When polling the hardware presence byte (`pre_scan_cmd`), the sensor unblocks once and then wedges at "finger present" until a power cycle or times out, returning unexpected status bytes (`0x00`, `0xaf`). The standard driver treats this as a fatal `FP_DEVICE_ERROR_PROTO`, aborting the session and reporting "device disconnected".
+3. **Matcher Incompatibility**: Upstream `libfprint` uses the NIST NBIS Bozorth3 minutiae matcher. Bozorth3 expects large swiped impressions with many minutiae points (threshold 24). The compact touch pad yields too few minutiae for Bozorth3, causing `"verify-no-match"` even when enrollment succeeds.
 
-[![Button Website]][Website]
-[![Button Documentation]][Documentation]
+---
 
-[![Button Supported]][Supported]
-[![Button Unsupported]][Unsupported]
+## The Solution
 
-[![Button Contribute]][Contribute]
-[![Button Contributors]][Contributors]
+This fork integrates the dedicated **`elanpress`** driver:
 
-</div>
+- **Native Press/Touch Support**: Configured natively as a press sensor (`FP_SCAN_TYPE_PRESS`).
+- **Image-Based Presence Detection**: Bypasses the unreliable hardware status byte by inferring finger presence directly from sensor image data.
+- **SIFT Keypoint Matching**: Replaces Bozorth3 with a robust SIFT (Scale-Invariant Feature Transform) keypoint matcher designed specifically for compact touch pads.
+- **Multi-Stage Enrollment**: Captures 12 presses during enrollment to construct a complete composite representation of the finger pad.
 
-## History
+---
 
-**LibFPrint** was originally developed as part of an
-academic project at the **[University Of Manchester]**.
+## How to Build & Install
 
-It aimed to hide the differences between consumer
-fingerprint scanners and provide a single uniform
-API to application developers.
+### 1. Install Build Dependencies
 
-## Goal
+- **Fedora**:
+  ```bash
+  sudo dnf install meson ninja gcc git libgusb-devel pixman-devel openssl-devel systemd-devel glib2-devel
+  ```
+- **Ubuntu / Debian**:
+  ```bash
+  sudo apt install meson ninja-build gcc git libgusb-dev libpixman-1-dev libssl-dev libsystemd-dev libglib2.0-dev
+  ```
+- **Arch Linux**:
+  Available via the AUR as [`libfprint-elanpress-git`](https://aur.archlinux.org/packages/libfprint-elanpress-git).
 
-The ultimate goal of the **FPrint** project is to make
-fingerprint scanners widely and easily usable under
-common Linux environments.
+### 2. Build the Library
 
-## License
+```bash
+git clone -b elan-0c6e-touch-support https://github.com/FCsab/Elan-04f3-0c6e-fingerprint-reader-fix.git
+cd Elan-04f3-0c6e-fingerprint-reader-fix
+meson setup build --prefix=/usr -Ddoc=false -Dintrospection=false
+ninja -C build
+```
 
-`Section 6` of the license states that for compiled works that use
-this library, such works must include **LibFPrint** copyright notices
-alongside the copyright notices for the other parts of the work.
+### 3. Install & Restart Service
 
-**LibFPrint** includes code from **NIST's** **[NBIS]** software distribution.
+```bash
+# Optional: backup stock library
+sudo cp /usr/lib64/libfprint-2.so.2.0.0 /usr/lib64/libfprint-2.so.2.0.0.stock 2>/dev/null || \
+sudo cp /usr/lib/x86_64-linux-gnu/libfprint-2.so.2.0.0 /usr/lib/x86_64-linux-gnu/libfprint-2.so.2.0.0.stock 2>/dev/null
 
-We include **Bozorth3** from the **[US Export Controlled]**
-distribution, which we have determined to be fine
-being shipped in an open source project.
+# Install library
+sudo ninja -C build install
 
-## Get in *touch*
+# Restart fprintd daemon
+sudo systemctl restart fprintd
+```
 
- - [IRC] - `#fprint` @ `irc.oftc.net`
- - [Matrix] - `#fprint:matrix.org` bridged to the IRC channel
- - [MailingList] - low traffic, not much used these days
+---
 
-<br/>
+## Enrolling & Testing
 
-<div align="right">
+1. **Delete any old prints:**
+   ```bash
+   fprintd-delete $USER
+   ```
 
-[![Badge License]][License]
+2. **Enroll your fingerprint:**
+   ```bash
+   fprintd-enroll
+   ```
+   > **Enrollment Tip:** The driver will ask for **12 distinct presses**. Press firmly and slightly shift your finger angle/position between presses (center, left edge, right edge, tip) so the SIFT keypoint mapping can cover your whole finger pad.
 
-</div>
+3. **Verify:**
+   ```bash
+   fprintd-verify
+   ```
+   Touch the sensor once to confirm recognition.
 
+4. **Lock Screen:**
+   Lock your screen (`Super + L`) and unlock using your fingerprint sensor.
 
-<!----------------------------------------------------------------------------->
+---
 
-[Documentation]: https://fprint.freedesktop.org/libfprint-dev/
-[Contributors]: https://gitlab.freedesktop.org/libfprint/libfprint/-/graphs/master
-[Unsupported]: https://gitlab.freedesktop.org/libfprint/wiki/-/wikis/Unsupported-Devices
-[Supported]: https://fprint.freedesktop.org/supported-devices.html
-[Website]: https://fprint.freedesktop.org/
-[MailingList]: https://lists.freedesktop.org/mailman/listinfo/fprint
-[IRC]: ircs://irc.oftc.net:6697/#fprint
-[Matrix]: https://matrix.to/#/#fprint:matrix.org
+## AI Disclosure
 
-[Contribute]: ./HACKING.md
-[License]: ./COPYING
+In the spirit of transparency, **AI tools were used in the development of this repository**:
+- Codebase research, driver porting/integration onto modern `libfprint`, meson build configurations, protocol debugging, and documentation were performed with the assistance of **Google DeepMind's Antigravity AI coding assistant**.
+- All changes were compiled, inspected, and tested on actual hardware (`04f3:0c6e` on ASUS laptop) before committing.
 
-[University Of Manchester]: https://www.manchester.ac.uk/
-[US Export Controlled]: https://fprint.freedesktop.org/us-export-control.html
-[NBIS]: http://fingerprint.nist.gov/NBIS/index.html
+---
 
+## Credits & Acknowledgements
 
-<!---------------------------------[ Badges ]---------------------------------->
-
-[Badge License]: https://img.shields.io/badge/License-LGPL2.1-015d93.svg?style=for-the-badge&labelColor=blue
-
-
-<!---------------------------------[ Buttons ]--------------------------------->
-
-[Button Documentation]: https://img.shields.io/badge/Documentation-04ACE6?style=for-the-badge&logoColor=white&logo=BookStack
-[Button Contributors]: https://img.shields.io/badge/Contributors-FF4F8B?style=for-the-badge&logoColor=white&logo=ActiGraph
-[Button Unsupported]: https://img.shields.io/badge/Unsupported_Devices-EF2D5E?style=for-the-badge&logoColor=white&logo=AdBlock
-[Button Contribute]: https://img.shields.io/badge/Contribute-66459B?style=for-the-badge&logoColor=white&logo=Git
-[Button Supported]: https://img.shields.io/badge/Supported_Devices-428813?style=for-the-badge&logoColor=white&logo=AdGuard
-[Button Website]: https://img.shields.io/badge/Homepage-3B80AE?style=for-the-badge&logoColor=white&logo=freedesktopDotOrg
+- Dedicated driver logic and SIFT matcher based on the work by [Filip Spanne](https://github.com/filip-rs/libfprint) (`elanpress`).
+- Upstream driver framework provided by the [libfprint](https://gitlab.freedesktop.org/libfprint/libfprint) project.
