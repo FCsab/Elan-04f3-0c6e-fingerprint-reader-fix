@@ -51,15 +51,20 @@ ninja -C build
 
 ### 3. Install & Restart Service
 
-```bash
-# Optional: backup stock library
-sudo cp /usr/lib64/libfprint-2.so.2.0.0 /usr/lib64/libfprint-2.so.2.0.0.stock 2>/dev/null || \
-sudo cp /usr/lib/x86_64-linux-gnu/libfprint-2.so.2.0.0 /usr/lib/x86_64-linux-gnu/libfprint-2.so.2.0.0.stock 2>/dev/null
+> [!IMPORTANT]
+> **Keep backups outside of `/usr/lib64/`:** Do **not** store backup copies (such as `.stock` or `.bak`) directly in `/usr/lib64/`. Because shared libraries contain an internal SONAME (`libfprint-2.so.2`), `ldconfig` automatically scans all files in `/usr/lib64/` and will repoint the active symlink back to the stock library on the next system update! Always store backups in `/var/backups/libfprint/`.
 
-# Install library
+```bash
+# 1. Safely backup stock library outside the library linker search path
+sudo mkdir -p /var/backups/libfprint
+sudo cp /usr/lib64/libfprint-2.so.2.0.0 /var/backups/libfprint/ 2>/dev/null || \
+sudo cp /usr/lib/x86_64-linux-gnu/libfprint-2.so.2.0.0 /var/backups/libfprint/ 2>/dev/null
+
+# 2. Install compiled library
 sudo ninja -C build install
 
-# Restart fprintd daemon
+# 3. Update linker cache and restart fprintd
+sudo ldconfig
 sudo systemctl restart fprintd
 ```
 
@@ -76,7 +81,11 @@ sudo systemctl restart fprintd
    ```bash
    fprintd-enroll
    ```
-   > **Enrollment Tip:** The driver will ask for **12 distinct presses**. Press firmly and slightly shift your finger angle/position between presses (center, left edge, right edge, tip) so the SIFT keypoint mapping can cover your whole finger pad.
+   > [!TIP]
+   > **Enrollment Tips & Responsiveness:**
+   > - **Lift your finger completely between presses for about 1 second.** The driver requires 10 consecutive empty polls to ensure you have lifted your finger so the same press isn't sampled twice. Tapping too quickly before the sensor registers a full release will ignore the press.
+   > - **Press firmly.** Light or partial touches with low contrast are automatically filtered out to ensure template quality, requiring an extra press.
+   > - **Vary your position slightly** (center, left side, right side, fingertip) across the 12 stages to allow SIFT to map the entire finger pad.
 
 3. **Verify:**
    ```bash
@@ -86,6 +95,32 @@ sudo systemctl restart fprintd
 
 4. **Lock Screen:**
    Lock your screen (`Super + L`) and unlock using your fingerprint sensor.
+
+---
+
+## Troubleshooting & Surviving System Updates
+
+### If an update reverts the fix or `fprintd` reports a protocol error:
+1. **Check where the symlink points:**
+   ```bash
+   ls -l /usr/lib64/libfprint-2.so.2
+   ```
+   If it points to a `.stock` or `.bak` file, move the backup file out of `/usr/lib64/`:
+   ```bash
+   sudo mkdir -p /var/backups/libfprint
+   sudo mv /usr/lib64/libfprint-2.so.2.0.0.* /var/backups/libfprint/ 2>/dev/null || true
+   sudo ldconfig
+   sudo systemctl restart fprintd
+   ```
+
+2. **If a Fedora update overwrites `libfprint-2.so.2.0.0` with upstream stock:**
+   Simply re-install from your build directory:
+   ```bash
+   cd ~/git/libfprint  # or wherever your repo is cloned
+   sudo ninja -C build install
+   sudo ldconfig
+   sudo systemctl restart fprintd
+   ```
 
 ---
 
